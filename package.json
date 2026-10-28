@@ -1,0 +1,12 @@
+{
+  "name": "fitpath-mvp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Lightweight fitness guide and progress API with zero npm dependencies",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {"node": ">=22.13.0"}
+}

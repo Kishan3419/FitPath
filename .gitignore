@@ -1,0 +1,10 @@
+data/
+*.db
+*.db-shm
+*.db-wal
+android/.gradle/
+android/.idea/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
