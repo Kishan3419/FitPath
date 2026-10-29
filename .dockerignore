@@ -6,3 +6,5 @@ README.md
 *.zip
 node_modules
 data
+.env
+.env.*
