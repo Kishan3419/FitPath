@@ -1,0 +1,145 @@
+
+name: FitPath CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fitpath-production
+  cancel-in-progress: false
+
+jobs:
+
+  # 1. Validate before deployment
+  validate:
+    name: Validate FitPath
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check JavaScript syntax
+        run: node --check server.mjs
+
+      - name: Validate Docker Compose
+        run: |
+          cp .env.example .env
+          docker compose \
+            -f compose.yaml \
+            -f compose.https.yaml \
+            config --quiet
+          rm .env
+
+  # 2. Deploy only after validation succeeds
+  deploy:
+    name: Deploy to OCI v2
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.V2_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.V2_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+
+          test -n "$SSH_KEY"
+          test -n "$KNOWN_HOSTS"
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+          chmod 600 ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy application
+        env:
+          VPS_HOST: ${{ secrets.V2_HOST }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o IdentitiesOnly=yes \
+            -i ~/.ssh/id_ed25519 \
+            "ubuntu@$VPS_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+
+          cd /home/ubuntu/FitPath
+
+          echo "Checking configuration..."
+          test -s .env
+
+          # Protect manual changes on the VPS.
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "ERROR: Uncommitted tracked changes on VPS."
+            echo "Synchronize the working tree before deployment."
+            exit 1
+          fi
+
+          echo "Pulling latest code from main..."
+          git pull --ff-only origin main
+
+          echo "Validating Docker configuration..."
+          docker compose \
+            -f compose.yaml \
+            -f compose.https.yaml \
+            config --quiet
+
+          echo "Building and deploying FitPath..."
+          docker compose \
+            -f compose.yaml \
+            -f compose.https.yaml \
+            up -d --build --remove-orphans
+
+          echo "Checking application and HTTPS health..."
+
+          for i in $(seq 1 20); do
+            if curl -fsS \
+                http://127.0.0.1:3000/health >/dev/null &&
+               curl -fsS \
+                --resolve fitpath.epic-morse.store:443:127.0.0.1 \
+                https://fitpath.epic-morse.store/health >/dev/null; then
+
+              echo "DEPLOYMENT SUCCESSFUL"
+              docker compose \
+                -f compose.yaml \
+                -f compose.https.yaml ps
+              exit 0
+            fi
+
+            sleep 3
+          done
+
+          echo "ERROR: Health check failed."
+
+          docker compose \
+            -f compose.yaml \
+            -f compose.https.yaml logs --tail=60 fitpath caddy
+
+          exit 1
+          REMOTE
