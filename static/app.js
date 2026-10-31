@@ -19,7 +19,7 @@ async function api(path,options={}){
 function greeting(){const h=new Date().getHours();return h<12?'Good morning':h<17?'Good afternoon':'Good evening';}
 function showAuth(){ $('auth').hidden=false;$('main-app').hidden=true;$('legal-footer').hidden=false;switchMode(state.authMode);}
 function showMain(){ $('auth').hidden=true;$('main-app').hidden=false;$('legal-footer').hidden=false;render();}
-function switchMode(mode){state.authMode=mode;const registering=mode==='register';$('registration-extra').hidden=!registering;$('registration-consent').required=registering;$('login-switch').classList.toggle('active',!registering);$('register-switch').classList.toggle('active',registering);$('auth-submit').innerHTML=registering?'Create my account <span>→</span>':'Sign in <span>→</span>';$('auth-password').autocomplete=registering?'new-password':'current-password';$('auth-name').required=registering;$('auth-error').hidden=true;}
+function switchMode(mode){state.authMode=mode;const registering=mode==='register';$('auth').classList.toggle('is-registering',registering);$('auth-form').classList.toggle('registering',registering);$('registration-extra').hidden=!registering;$('registration-consent').required=registering;$('login-switch').classList.toggle('active',!registering);$('register-switch').classList.toggle('active',registering);$('auth-submit').innerHTML=registering?'Create my account <span>→</span>':'Sign in <span>→</span>';$('auth-password').autocomplete=registering?'new-password':'current-password';$('auth-name').required=registering;$('auth-error').hidden=true;renderGoogleButtons();}
 $('login-switch').addEventListener('click',()=>switchMode('login'));
 $('register-switch').addEventListener('click',()=>switchMode('register'));
 async function acceptSession(result){
@@ -43,7 +43,7 @@ function isDone(exerciseId,date=todayLocal()){return state.logs.some(l=>l.exerci
 async function updateStats(){state.stats=await api(`/api/stats?today=${encodeURIComponent(todayLocal())}`);}
 async function googleCredential(result){
  $('google-error').hidden=true;
- if(!state.user&&!$('google-consent').checked){$('google-error').textContent='Please agree to the Terms and read the Privacy Policy before continuing.';$('google-error').hidden=false;return;}
+ if(!state.user&&!googleConsentGiven()){$('google-error').textContent='Please agree to the Terms and read the Privacy Policy before continuing.';$('google-error').hidden=false;return;}
  try{
   const linking=Boolean(state.user);
   const response=await api(linking?'/api/auth/google/link':'/api/auth/google',{method:'POST',body:JSON.stringify({credential:result.credential})});
@@ -51,6 +51,7 @@ async function googleCredential(result){
   else await acceptSession(response);
  }catch(error){$('google-error').textContent=error.message;$('google-error').hidden=false;}
 }
+function googleConsentGiven(){return state.authMode==='register'?!$('registration-extra').hidden&&$('registration-consent').checked:$('google-consent').checked;}
 function renderGoogleButtons(){
  if(!state.config?.googleClientId||!window.google?.accounts?.id)return;
  $('google-unavailable').hidden=true;
@@ -59,7 +60,7 @@ function renderGoogleButtons(){
   state.googleInitialized=true;
  }
  const authButton=$('google-button');
- authButton.hidden=!$('google-consent').checked;
+ authButton.hidden=!googleConsentGiven();
  if(!authButton.hidden&&!authButton.dataset.ready){
   window.google.accounts.id.renderButton(authButton,{type:'standard',theme:'filled_black',size:'large',text:'continue_with',shape:'pill',width:280});
   authButton.dataset.ready='true';
@@ -218,4 +219,5 @@ document.addEventListener('submit',async e=>{
  else if(e.target.id==='chat-form'){e.preventDefault();await submitChat(e.target);}
 });
 $('google-consent').addEventListener('change',renderGoogleButtons);
+$('registration-consent').addEventListener('change',renderGoogleButtons);
 if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/service-worker.js').catch(()=>{}));

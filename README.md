@@ -20,7 +20,7 @@ Not included yet: payments, video streaming, calorie prescriptions, clinician-ap
 
 Before public launch, configure an actual privacy/support email and review the draft legal pages for your operation. Google sign-in requires a Google **Web OAuth client ID** whose authorized JavaScript origin is your app domain. Gemini chat requires a Gemini API key. Put these values in `.env` on the server only; never commit them or expose API keys in browser code.
 
-Set `GOOGLE_CLIENT_ID`, `GEMINI_API_KEY`, and `FITPATH_CONTACT_EMAIL` in `.env` to enable those features and publish a valid contact. Google sign-in is for supported browsers; Google's embedded WebView restrictions may prevent sign-in in the optional Android wrapper, so use the installable Android Chrome PWA for Google sign-in.
+Set `GOOGLE_CLIENT_ID`, `GEMINI_API_KEY`, and `FITPATH_CONTACT_EMAIL` in `.env` to enable those features and publish a valid contact. The provided public Google Web Client ID is prefilled in `.env.example`; the OAuth client secret and Spring redirect URI are not used by this app's Google Identity Services ID-token flow. Add your Gemini API key to `.env` directly on the VPS; it has been redacted here and must never be committed or pasted into source files. In Google Cloud Console, authorize your app domain as a JavaScript origin. Google sign-in is for supported browsers; Google's embedded WebView restrictions may prevent sign-in in the optional Android wrapper, so use the installable Android Chrome PWA for Google sign-in.
 
 ## 1. Run and validate with Docker
 

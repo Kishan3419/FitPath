@@ -38,7 +38,7 @@ test('API, auth, seeded content, persistence, and static web assets',async t=>{
  assert.equal((await call('/api/logs?date='+date,'GET',null,token)).json.logs.length,1);
  assert.equal((await call('/api/logs/wall-pushup?date='+date,'DELETE',null,token)).status,200);
  assert.equal((await call('/api/logs?date='+date,'GET',null,token)).json.logs.length,0);
- const html=await fetch(origin+'/');assert.equal(html.status,200);assert.match(await html.text(),/FitPath/);
+ const html=await fetch(origin+'/');assert.equal(html.status,200);assert.match(await html.text(),/FitPath/);assert.match(html.headers.get('content-security-policy'),/style-src 'self' 'unsafe-inline' https:\/\/accounts\.google\.com/);
  for(const path of ['/privacy.html','/terms.html','/disclaimer.html']){const page=await fetch(origin+path);const body=await page.text();assert.equal(page.status,200);assert.match(body,/Last updated: October 31, 2026/);assert.match(body,/privacy@example\.test/);}
  const manifest=await fetch(origin+'/manifest.webmanifest');assert.equal(manifest.status,200);assert.equal((await manifest.json()).display,'standalone');
  const sw=await fetch(origin+'/service-worker.js');assert.equal(sw.status,200);
