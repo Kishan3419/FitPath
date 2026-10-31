@@ -2,18 +2,19 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
+import pg from 'pg';
 
 function freePort(){return new Promise((resolve,reject)=>{const s=net.createServer();s.listen(0,'127.0.0.1',()=>{const port=s.address().port;s.close(()=>resolve(port));});s.on('error',reject);});}
 
 test('API, auth, seeded content, persistence, and static web assets',async t=>{
  const port=await freePort();
  const proc=spawn(process.execPath,['server.mjs'],{cwd:new URL('../',import.meta.url).pathname,env:{...process.env,PORT:String(port)},stdio:['ignore','pipe','pipe']});
- let stderr='';proc.stderr.on('data',d=>stderr+=d);
+ let stdout='',stderr='';proc.stdout.on('data',d=>stdout+=d);proc.stderr.on('data',d=>stderr+=d);
  t.after(async()=>{proc.kill('SIGTERM');await new Promise(resolve=>proc.once('close',resolve));});
  const origin=`http://127.0.0.1:${port}`;
  let ready=false;
  for(let i=0;i<200;i++){try{const resp=await fetch(origin+'/health');if(resp.ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,50));}
- assert.ok(ready,`Server did not start: ${stderr}`);
+ assert.ok(ready,`Server did not start. stdout: ${stdout}; stderr: ${stderr}`);
  const call=async(path,method='GET',body,token)=>{const r=await fetch(origin+path,{method,headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},...(body?{body:JSON.stringify(body)}:{})});return {status:r.status,json:await r.json(),headers:r.headers};};
  const catalog=await call('/api/catalog');assert.equal(catalog.status,200);assert.equal(catalog.json.exercises.length,12);assert.equal(catalog.json.plans.length,3);assert.ok(catalog.json.plans.every(x=>x.meals.length===4));assert.equal(catalog.json.exercises[0].steps.length,4);
  const config=await call('/api/config');assert.equal(config.status,200);assert.equal(config.json.googleClientId,null);assert.equal(config.json.chatEnabled,false);
@@ -21,7 +22,12 @@ test('API, auth, seeded content, persistence, and static web assets',async t=>{
  const register=await call('/api/register','POST',user);assert.equal(register.status,201);assert.ok(register.json.token);assert.equal(register.json.user.level,'intermediate');assert.ok(!('password_hash' in register.json.user));
  const token=register.json.token;
  assert.equal((await call('/api/me')).status,401);
- assert.equal((await call('/api/me','GET',null,token)).json.user.name,'Test Athlete');
+ const database=new pg.Client();await database.connect();await database.query('UPDATE users SET google_picture_url = $1 WHERE email = $2',['https://lh3.googleusercontent.com/test-avatar','test@example.com']);await database.end();
+ const profile=(await call('/api/me','GET',null,token)).json.user;assert.equal(profile.name,'Test Athlete');assert.equal(profile.avatar_url,'https://lh3.googleusercontent.com/test-avatar');assert.equal(profile.has_custom_avatar,false);
+ const avatar='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lT8AAAAASUVORK5CYII=';
+ const uploadedAvatar=await call('/api/me/avatar','POST',{mimeType:'image/png',data:avatar},token);assert.equal(uploadedAvatar.status,200);assert.equal(uploadedAvatar.json.user.avatar_url,`data:image/png;base64,${avatar}`);assert.equal(uploadedAvatar.json.user.has_custom_avatar,true);
+ const resetAvatar=await call('/api/me/avatar','DELETE',null,token);assert.equal(resetAvatar.status,200);assert.equal(resetAvatar.json.user.avatar_url,'https://lh3.googleusercontent.com/test-avatar');assert.equal(resetAvatar.json.user.has_custom_avatar,false);
+ assert.equal((await call('/api/me/avatar','POST',{mimeType:'image/svg+xml',data:avatar},token)).status,400);
  assert.equal((await call('/api/stats?today=2026-10-27','GET',null,token)).json.current_streak,0);
  assert.equal((await call('/api/stats')).status,401);
  assert.equal((await call('/api/auth/google','POST',{credential:'test'})).status,503);
@@ -38,7 +44,7 @@ test('API, auth, seeded content, persistence, and static web assets',async t=>{
  assert.equal((await call('/api/logs?date='+date,'GET',null,token)).json.logs.length,1);
  assert.equal((await call('/api/logs/wall-pushup?date='+date,'DELETE',null,token)).status,200);
  assert.equal((await call('/api/logs?date='+date,'GET',null,token)).json.logs.length,0);
- const html=await fetch(origin+'/');assert.equal(html.status,200);assert.match(await html.text(),/FitPath/);assert.match(html.headers.get('content-security-policy'),/style-src 'self' 'unsafe-inline' https:\/\/accounts\.google\.com/);
+ const html=await fetch(origin+'/');assert.equal(html.status,200);assert.match(await html.text(),/FitPath/);assert.equal(html.headers.get('referrer-policy'),'strict-origin-when-cross-origin');assert.match(html.headers.get('content-security-policy'),/style-src 'self' 'unsafe-inline' https:\/\/accounts\.google\.com/);assert.match(html.headers.get('content-security-policy'),/img-src 'self' data: https:\/\/googleusercontent\.com https:\/\/\*\.googleusercontent\.com/);
  for(const path of ['/privacy.html','/terms.html','/disclaimer.html']){const page=await fetch(origin+path);const body=await page.text();assert.equal(page.status,200);assert.match(body,/Last updated: October 31, 2026/);assert.match(body,/privacy@example\.test/);}
  const manifest=await fetch(origin+'/manifest.webmanifest');assert.equal(manifest.status,200);assert.equal((await manifest.json()).display,'standalone');
  const sw=await fetch(origin+'/service-worker.js');assert.equal(sw.status,200);

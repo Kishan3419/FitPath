@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT,
   google_sub TEXT,
+  google_picture_url TEXT,
+  custom_avatar_data BYTEA,
+  custom_avatar_type TEXT,
   age INTEGER,
   goal TEXT NOT NULL DEFAULT 'general',
   level TEXT NOT NULL DEFAULT 'beginner',
@@ -72,6 +75,9 @@ CREATE TABLE IF NOT EXISTS users (
 
 ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS google_picture_url TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_avatar_data BYTEA;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_avatar_type TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub
 ON users (google_sub) WHERE google_sub IS NOT NULL;
 
@@ -243,20 +249,22 @@ function error(res, status, message) {
 
 const secureHeaders = {
   'X-Content-Type-Options': 'nosniff',
-  'Referrer-Policy': 'no-referrer',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
   'X-Frame-Options': 'DENY',
   'Content-Security-Policy':
-    "default-src 'self'; script-src 'self' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: https://*.googleusercontent.com; connect-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    "default-src 'self'; script-src 'self' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: https://googleusercontent.com https://*.googleusercontent.com; connect-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
 };
 
-function readBody(req) {
+function readBody(req, maxBytes = 16000) {
   return new Promise((resolve, reject) => {
     let text = '';
+    let bytes = 0;
     req.setEncoding('utf8');
     req.on('data', chunk => {
       text += chunk;
-      if (text.length > 16000) {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > maxBytes) {
         reject(Object.assign(new Error('Request is too large'), { status: 413 }));
         req.destroy();
       }
@@ -315,7 +323,13 @@ async function getUser(id) {
   return one(`
     SELECT id, name, email, age, goal,
            level, diet_pref, created_at,
-           (google_sub IS NOT NULL) AS google_connected
+           (google_sub IS NOT NULL) AS google_connected,
+           COALESCE(
+             'data:' || custom_avatar_type || ';base64,' ||
+               replace(encode(custom_avatar_data, 'base64'), E'\n', ''),
+             google_picture_url
+           ) AS avatar_url,
+           (custom_avatar_data IS NOT NULL) AS has_custom_avatar
     FROM users
     WHERE id = $1
   `, [id]);
@@ -382,6 +396,42 @@ function allowChatRequest(userId) {
   }
   attempt.count++;
   return attempt.count <= 10;
+}
+
+function googlePictureUrl(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' &&
+      (url.hostname === 'googleusercontent.com' ||
+       url.hostname.endsWith('.googleusercontent.com'))
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function decodeAvatar(data, mimeType) {
+  const signatures = {
+    'image/jpeg': bytes => bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff,
+    'image/png': bytes => bytes.subarray(0, 8).equals(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    ),
+    'image/webp': bytes => bytes.toString('ascii', 0, 4) === 'RIFF' &&
+      bytes.toString('ascii', 8, 12) === 'WEBP'
+  };
+  const validMimeType = Object.hasOwn(signatures, mimeType);
+  if (!validMimeType || typeof data !== 'string' ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) {
+    return null;
+  }
+  const image = Buffer.from(data, 'base64');
+  if (!image.length || image.length > 256 * 1024 ||
+      image.toString('base64') !== data || !signatures[mimeType](image)) {
+    return null;
+  }
+  return image;
 }
 
 function throttle(req) {
@@ -518,13 +568,28 @@ const server = http.createServer(async (req, res) => {
         return error(res, 409, 'An account already uses this email. Sign in with that account, then connect Google from your profile.');
       }
 
+      const pictureUrl = googlePictureUrl(claims.picture);
       const userId = existing
         ? existing.id
         : (await one(`
-            INSERT INTO users (name, email, password_hash, google_sub)
-            VALUES ($1, $2, NULL, $3)
+            INSERT INTO users (
+              name, email, password_hash, google_sub, google_picture_url
+            )
+            VALUES ($1, $2, NULL, $3, $4)
             RETURNING id
-          `, [String(claims.name || email.split('@')[0]).slice(0, 80), email, claims.sub])).id;
+          `, [
+            String(claims.name || email.split('@')[0]).slice(0, 80),
+            email,
+            claims.sub,
+            pictureUrl
+          ])).id;
+
+      if (existing && pictureUrl) {
+        await run(
+          'UPDATE users SET google_picture_url = $1 WHERE id = $2',
+          [pictureUrl, userId]
+        );
+      }
 
       return send(res, 200, {
         token: await newSession(userId),
@@ -646,8 +711,11 @@ const server = http.createServer(async (req, res) => {
         }
         try {
           await run(
-            'UPDATE users SET google_sub = $1 WHERE id = $2',
-            [claims.sub, user.id]
+            `UPDATE users
+             SET google_sub = $1,
+                 google_picture_url = COALESCE($2, google_picture_url)
+             WHERE id = $3`,
+            [claims.sub, googlePictureUrl(claims.picture), user.id]
           );
         } catch (err) {
           if (err.code === '23505') {
@@ -660,6 +728,29 @@ const server = http.createServer(async (req, res) => {
 
       if (req.method === 'GET' && path === '/api/me') {
         return send(res, 200, { user });
+      }
+
+      if (req.method === 'POST' && path === '/api/me/avatar') {
+        const d = await readBody(req, 360000);
+        const image = decodeAvatar(d.data, d.mimeType);
+        if (!image) {
+          return error(res, 400, 'Choose a valid PNG, JPEG, or WebP image up to 256 KB.');
+        }
+        await run(`
+          UPDATE users
+          SET custom_avatar_data = $1, custom_avatar_type = $2
+          WHERE id = $3
+        `, [image, d.mimeType, user.id]);
+        return send(res, 200, { user: await getUser(user.id) });
+      }
+
+      if (req.method === 'DELETE' && path === '/api/me/avatar') {
+        await run(`
+          UPDATE users
+          SET custom_avatar_data = NULL, custom_avatar_type = NULL
+          WHERE id = $1
+        `, [user.id]);
+        return send(res, 200, { user: await getUser(user.id) });
       }
 
       if (req.method === 'GET' && path === '/api/stats') {

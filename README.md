@@ -10,11 +10,14 @@ FitPath is a small working MVP. It uses **JavaScript (Node.js + vanilla HTML/CSS
 - 3 food plans (balanced, vegetarian, protein-focused), 4 meal ideas per plan.
 - Three rotating exercises each day, a step-by-step guided workout that resumes at the first unfinished activity, and saved completion history.
 - Current and personal-best activity streaks based on saved workout dates.
+- Google profile photos with private custom avatar uploads that take precedence until reset.
 - Optional Google sign-in and a Gemini-powered fitness chat; both require server-side environment configuration.
 - Privacy Policy, Terms of Use, and Health Disclaimer pages, linked unobtrusively from the app footer.
 - Animated, simplified movement previews for all 12 exercise guides.
 - Responsive installable **PWA** from Android Chrome, plus Java Android WebView wrapper source.
 - Persistent data in the configured PostgreSQL database.
+
+Account details, workout logs, Google profile-photo URLs, and uploaded custom avatars are stored in the configured PostgreSQL database. Custom avatars accept PNG, JPEG, or WebP images up to 256 KB.
 
 Not included yet: payments, video streaming, calorie prescriptions, clinician-approved personal diet plans, administrator panel, social functions, password recovery, in-app account deletion, or email verification. This is a starter app, **not for clinical use**. Not suitable as tailored guidance for minors.
 
@@ -123,6 +126,8 @@ On first boot the 12 exercise records, 3 diet plans and 12 meals are inserted on
 | POST | `/api/login` | Returns bearer token |
 | GET | `/api/me` | Current profile, authenticated |
 | PATCH | `/api/me` | Update profile, authenticated |
+| POST | `/api/me/avatar` | Save a custom PNG, JPEG, or WebP profile photo (up to 256 KB), authenticated |
+| DELETE | `/api/me/avatar` | Remove the custom photo and return to the Google photo, authenticated |
 | GET | `/api/logs` | Activity history, authenticated; optional `?date=YYYY-MM-DD` |
 | POST | `/api/logs` | Mark one exercise done for a date |
 | DELETE | `/api/logs/:exerciseId?date=YYYY-MM-DD` | Undo a daily completion |
@@ -130,19 +135,14 @@ On first boot the 12 exercise records, 3 diet plans and 12 meals are inserted on
 
 ## 7. Backups, updates and operations
 
-The SQLite files are in a Docker-managed named volume. To safely back up, first stop the app, then copy the database to a location **outside the Docker volume**, and restart:
+FitPath stores account, workout, and uploaded-avatar data in the PostgreSQL database configured by `PGHOST`, `PGPORT`, `PGDATABASE`, and `PGUSER`. Back up that PostgreSQL database; the `/data` Docker volume does not contain these records. For a managed PostgreSQL provider, enable its automated backups. Alternatively, install the PostgreSQL client tools on the VPS and run `pg_dump` with the connection details from `.env` (it will prompt for the password):
 
 ```bash
 cd ~/FitPath-MVP
-sudo docker compose stop fitpath
 mkdir -p "$HOME/fitpath-backups"
-# Find the actual Docker volume name from: sudo docker volume ls
-sudo docker volume ls
-# Example: replace FITPATH_VOLUME with the full volume name from the list
-sudo docker run --rm -v FITPATH_VOLUME:/from:ro -v "$HOME/fitpath-backups":/to busybox sh -c 'cp /from/fitpath.db /to/fitpath-$(date +%Y%m%d-%H%M%S).db'
-sudo docker compose start fitpath
+pg_dump --host=YOUR_PGHOST --port=5432 --username=YOUR_PGUSER --dbname=YOUR_PGDATABASE --format=custom --file="$HOME/fitpath-backups/fitpath-$(date +%Y%m%d-%H%M%S).dump"
 ```
 
-Keep backups encrypted and protected; they contain profile information, password hashes and workout logs. Test a restore periodically. Back up before editing schema. To update after copying new source files, run `sudo docker compose -f compose.yaml -f compose.https.yaml up -d --build`. When using HTTPS, include the second Compose file on future operations.
+Keep backups encrypted and protected; they contain profile information, password hashes, profile photos, and workout logs. Test a restore periodically. The app creates and upgrades its required tables at startup without replacing existing account or activity records. To update after copying new source files, run `sudo docker compose -f compose.yaml -f compose.https.yaml up -d --build`. When using HTTPS, include the second Compose file on future operations.
 
 Potential future versions: admin UI to add exercises/diet plans, exercise media, reminders, account recovery and data export/delete, user goal-driven training schedules, clinician-reviewed nutrition plans, analytics, multi-user scaling, and rate limiting at the reverse proxy.

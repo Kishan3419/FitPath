@@ -106,8 +106,8 @@ function dietView(){const current=state.catalog.plans.find(p=>p.id===state.user.
  <div class="section-title"><h2>${escapeHtml(current.name)} meals</h2><p>Example day</p></div>
  ${current.meals.map(m=>`<div class="meal-card"><div class="meal-time">${escapeHtml(m.meal_type)}</div><div><h3>${escapeHtml(m.name)}</h3><p>${escapeHtml(m.description)}</p></div></div>`).join('')}
  <p class="fine-note">Drink water according to thirst and conditions. Food choices vary with allergies, culture, activity, and health. Ask a registered dietitian about individualized needs.</p>`;}
-function profileView(){const u=state.user, m=metrics();const recent=state.logs.slice(0,8);return `${header('Your profile','PERSONAL SETTINGS','Your level and preferences shape your routine.')}
- <div class="profile-card"><div class="profile-summary"><div class="avatar">${escapeHtml(u.name.slice(0,1).toUpperCase())}</div><div><strong>${escapeHtml(u.name)}</strong><p>${escapeHtml(u.email)}</p></div></div>
+function profileView(){const u=state.user, m=metrics();const recent=state.logs.slice(0,8);const avatar=u.avatar_url?`<img src="${escapeHtml(u.avatar_url)}" alt="">`:escapeHtml(u.name.slice(0,1).toUpperCase());return `${header('Your profile','PERSONAL SETTINGS','Your level and preferences shape your routine.')}
+ <div class="profile-card"><div class="profile-summary"><div class="avatar">${avatar}</div><div><strong>${escapeHtml(u.name)}</strong><p>${escapeHtml(u.email)}</p><label class="avatar-upload">Change profile picture<input id="profile-avatar-input" type="file" accept="image/png,image/jpeg,image/webp"><small>PNG, JPEG or WebP · up to 256 KB</small></label>${u.has_custom_avatar?'<button type="button" class="avatar-reset" data-remove-avatar>Use Google photo</button>':''}</div></div>
  <div class="profile-streak"><span>🔥</span><div><strong>${state.stats?.current_streak??0} day current streak</strong><p>Personal best: ${state.stats?.longest_streak??0} days · ${state.stats?.active_days??0} active days total</p></div></div>
  <form id="profile-form" class="profile-fields"><label>Full name<input name="name" required minlength="2" maxlength="80" value="${escapeHtml(u.name)}"></label>
  <label>Age (optional, 18+)<input name="age" type="number" min="18" max="100" value="${u.age??''}" placeholder="Not set"></label>
@@ -198,9 +198,32 @@ async function completeWorkoutExercise(id){
 }
 async function toggleLog(id){try{const date=todayLocal();if(isDone(id)) {await api(`/api/logs/${encodeURIComponent(id)}?date=${encodeURIComponent(date)}`,{method:'DELETE'});state.logs=state.logs.filter(l=>!(l.exercise_id===id&&l.performed_on===date));toast('Removed from today’s log');}else{await api('/api/logs',{method:'POST',body:JSON.stringify({exerciseId:id,date})});state.logs.unshift({exercise_id:id,performed_on:date});toast('Great work! Exercise logged.');}await updateStats();render();if(!$('modal').hidden)detail(id);}catch(error){toast(error.message);}}
 async function updateProfile(values){try{const r=await api('/api/me',{method:'PATCH',body:JSON.stringify(values)});state.user=r.user;render();toast('Profile updated!');}catch(e){toast(e.message);}}
+async function updateProfileAvatar(fileInput){
+ const file=fileInput.files?.[0];
+ if(!file)return;
+ if(file.size>256*1024||!['image/png','image/jpeg','image/webp'].includes(file.type)){
+  toast('Choose a PNG, JPEG, or WebP image up to 256 KB.');
+  fileInput.value='';
+  return;
+ }
+ try{
+  const dataUrl=await new Promise((resolve,reject)=>{
+   const reader=new FileReader();
+   reader.onload=()=>resolve(reader.result);
+   reader.onerror=()=>reject(new Error('Could not read the selected image.'));
+   reader.readAsDataURL(file);
+  });
+  const result=await api('/api/me/avatar',{method:'POST',body:JSON.stringify({mimeType:file.type,data:String(dataUrl).split(',')[1]})});
+  state.user=result.user;
+  render();
+  toast('Profile picture updated.');
+ }catch(error){toast(error.message);}
+ finally{fileInput.value='';}
+}
 document.addEventListener('click',async e=>{
  const target=e.target.closest('button');if(!target)return;
  if(target.dataset.tab){state.tab=target.dataset.tab;render();window.scrollTo(0,0);}
+ else if(target.dataset.removeAvatar!==undefined){try{const result=await api('/api/me/avatar',{method:'DELETE'});state.user=result.user;render();toast('Profile picture reset.');}catch(error){toast(error.message);}}
  else if(target.id==='chat-launcher'){state.chatOpen=!state.chatOpen;$('chat-widget').hidden=!state.chatOpen;if(state.chatOpen)renderChat();}
  else if(target.dataset.chatClose!==undefined){state.chatOpen=false;$('chat-widget').hidden=true;}
  else if(target.dataset.startWorkout!==undefined){startWorkout();}
@@ -221,6 +244,7 @@ document.addEventListener('submit',async e=>{
  if(e.target.id==='profile-form'){e.preventDefault();const d=Object.fromEntries(new FormData(e.target).entries());await updateProfile(d);}
  else if(e.target.id==='chat-form'){e.preventDefault();await submitChat(e.target);}
 });
+document.addEventListener('change',e=>{if(e.target.id==='profile-avatar-input')updateProfileAvatar(e.target);});
 $('google-consent').addEventListener('change',renderGoogleButtons);
 $('registration-consent').addEventListener('change',renderGoogleButtons);
 if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/service-worker.js').catch(()=>{}));
