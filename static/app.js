@@ -60,7 +60,10 @@ function renderGoogleButtons(){
   state.googleInitialized=true;
  }
  const authButton=$('google-button');
- authButton.hidden=!googleConsentGiven();
+ const consentGiven=googleConsentGiven();
+ authButton.hidden=false;
+ authButton.classList.toggle('needs-consent',!consentGiven);
+ authButton.setAttribute('aria-disabled',String(!consentGiven));
  if(!authButton.hidden&&!authButton.dataset.ready){
   window.google.accounts.id.renderButton(authButton,{type:'standard',theme:'filled_black',size:'large',text:'continue_with',shape:'pill',width:280});
   authButton.dataset.ready='true';

@@ -12,3 +12,4 @@
 @media(max-width:720px) and (max-height:680px){.topbar{height:56px}.auth-wrap.is-registering{min-height:calc(100dvh - 56px);padding:5px 10px 8px}.auth-wrap.is-registering .auth-card{padding:9px 12px}.auth-wrap.is-registering .auth-divider{margin:2px 0}.auth-wrap.is-registering #auth-form.registering label{margin:2px 0}.auth-wrap.is-registering #auth-form.registering label input,.auth-wrap.is-registering #auth-form.registering label select{min-height:34px;padding:6px 9px}.legal-footer{padding-top:6px;padding-bottom:calc(6px + env(safe-area-inset-bottom))}}
 @media(max-width:720px){.auth-wrap.is-registering{min-height:calc(100dvh - 111px)}}
 @media(max-width:720px) and (max-height:680px){.auth-wrap.is-registering{min-height:calc(100dvh - 85px)}}
+.google-auth #google-button.needs-consent{opacity:.55;pointer-events:none}
