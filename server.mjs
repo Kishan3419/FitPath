@@ -5,9 +5,20 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypto';
 import pg from 'pg';
+import { OAuth2Client } from 'google-auth-library';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID || undefined);
+const contactEmail = process.env.FITPATH_CONTACT_EMAIL || '';
+const escapeHTML = value => String(value).replace(/[&<>"']/g, char => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+})[char]);
+const contactLink = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/.test(contactEmail)
+  ? `<a href="mailto:${escapeHTML(contactEmail)}">${escapeHTML(contactEmail)}</a>`
+  : '<strong>Contact email not configured. Set FITPATH_CONTACT_EMAIL in .env before launch.</strong>';
 
 // PostgreSQL connection with certificate verification.
 const ssl = process.env.PGSSL === 'true'
@@ -49,7 +60,8 @@ CREATE TABLE IF NOT EXISTS users (
   id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
+  password_hash TEXT,
+  google_sub TEXT,
   age INTEGER,
   goal TEXT NOT NULL DEFAULT 'general',
   level TEXT NOT NULL DEFAULT 'beginner',
@@ -57,6 +69,11 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL DEFAULT
     (to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
+
+ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub
+ON users (google_sub) WHERE google_sub IS NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower
 ON users (LOWER(email));
@@ -229,7 +246,7 @@ const secureHeaders = {
   'Referrer-Policy': 'no-referrer',
   'X-Frame-Options': 'DENY',
   'Content-Security-Policy':
-    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    "default-src 'self'; script-src 'self' https://accounts.google.com; style-src 'self'; img-src 'self' data: https://*.googleusercontent.com; connect-src 'self' https://accounts.google.com; frame-src https://accounts.google.com; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
 };
 
@@ -297,7 +314,8 @@ async function newSession(uid) {
 async function getUser(id) {
   return one(`
     SELECT id, name, email, age, goal,
-           level, diet_pref, created_at
+           level, diet_pref, created_at,
+           (google_sub IS NOT NULL) AS google_connected
     FROM users
     WHERE id = $1
   `, [id]);
@@ -323,6 +341,48 @@ const goalValues = ['general', 'strength', 'weight-management'];
 const dietValues = ['balanced', 'vegetarian', 'high-protein'];
 
 const attempts = new Map();
+const chatAttempts = new Map();
+
+async function verifyGoogleCredential(credential) {
+  if (!GOOGLE_CLIENT_ID) {
+    throw Object.assign(new Error('Google sign-in is not configured.'), { status: 503 });
+  }
+  if (typeof credential !== 'string' || credential.length > 12000) {
+    throw Object.assign(new Error('Invalid Google credential.'), { status: 400 });
+  }
+
+  let ticket;
+  try {
+    ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: GOOGLE_CLIENT_ID
+    });
+  } catch {
+    throw Object.assign(new Error('Google sign-in could not be verified. Please try again.'), { status: 401 });
+  }
+
+  const claims = ticket.getPayload();
+  if (!claims?.sub || !claims.email || claims.email_verified !== true) {
+    throw Object.assign(new Error('Google did not provide a verified email address.'), { status: 401 });
+  }
+  return claims;
+}
+
+function allowChatRequest(userId) {
+  const now = Date.now();
+  if (chatAttempts.size > 10000) {
+    for (const [id, attempt] of chatAttempts) {
+      if (now - attempt.since > 60000) chatAttempts.delete(id);
+    }
+  }
+  const attempt = chatAttempts.get(userId);
+  if (!attempt || now - attempt.since >= 60000) {
+    chatAttempts.set(userId, { since: now, count: 1 });
+    return true;
+  }
+  attempt.count++;
+  return attempt.count <= 10;
+}
 
 function throttle(req) {
   const ip = req.socket.remoteAddress || 'unknown';
@@ -357,7 +417,10 @@ const files = {
   '/manifest.webmanifest': 'manifest.webmanifest',
   '/service-worker.js': 'service-worker.js',
   '/icons/icon-192.png': 'icons/icon-192.png',
-  '/icons/icon-512.png': 'icons/icon-512.png'
+  '/icons/icon-512.png': 'icons/icon-512.png',
+  '/privacy.html': 'privacy.html',
+  '/terms.html': 'terms.html',
+  '/disclaimer.html': 'disclaimer.html'
 };
 
 const types = {
@@ -373,7 +436,9 @@ const cache = new Map();
 for (const [path, file] of Object.entries(files)) {
   const bytes = await readFile(join(ROOT, 'static', file));
   cache.set(path, {
-    bytes,
+    bytes: file.endsWith('.html') && file !== 'index.html'
+      ? Buffer.from(bytes.toString('utf8').replaceAll('{{CONTACT_LINK}}', contactLink))
+      : bytes,
     type: types[file.slice(file.lastIndexOf('.'))] ||
       'application/octet-stream'
   });
@@ -428,6 +493,43 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && path === '/api/catalog') {
       return send(res, 200, await listCatalog());
+    }
+
+    if (req.method === 'GET' && path === '/api/config') {
+      return send(res, 200, {
+        googleClientId: GOOGLE_CLIENT_ID || null,
+        chatEnabled: Boolean(GEMINI_API_KEY)
+      });
+    }
+
+    if (req.method === 'POST' && path === '/api/auth/google') {
+      if (throttle(req)) {
+        return error(res, 429, 'Too many sign-in attempts. Try again later.');
+      }
+      const d = await readBody(req);
+      const claims = await verifyGoogleCredential(d.credential);
+      const email = claims.email.trim().toLowerCase();
+      const existing = await one(
+        'SELECT id, google_sub FROM users WHERE email = $1',
+        [email]
+      );
+
+      if (existing && existing.google_sub !== claims.sub) {
+        return error(res, 409, 'An account already uses this email. Sign in with that account, then connect Google from your profile.');
+      }
+
+      const userId = existing
+        ? existing.id
+        : (await one(`
+            INSERT INTO users (name, email, password_hash, google_sub)
+            VALUES ($1, $2, NULL, $3)
+            RETURNING id
+          `, [String(claims.name || email.split('@')[0]).slice(0, 80), email, claims.sub])).id;
+
+      return send(res, 200, {
+        token: await newSession(userId),
+        user: await getUser(userId)
+      });
     }
 
     if (req.method === 'POST' && path === '/api/register') {
@@ -536,8 +638,119 @@ const server = http.createServer(async (req, res) => {
         return error(res, 401, 'Please sign in again.');
       }
 
+      if (req.method === 'POST' && path === '/api/auth/google/link') {
+        const d = await readBody(req);
+        const claims = await verifyGoogleCredential(d.credential);
+        if (claims.email.trim().toLowerCase() !== user.email.toLowerCase()) {
+          return error(res, 400, 'Use the same Google email address as your FitPath account.');
+        }
+        try {
+          await run(
+            'UPDATE users SET google_sub = $1 WHERE id = $2',
+            [claims.sub, user.id]
+          );
+        } catch (err) {
+          if (err.code === '23505') {
+            return error(res, 409, 'That Google account is already connected to another FitPath account.');
+          }
+          throw err;
+        }
+        return send(res, 200, { user: await getUser(user.id) });
+      }
+
       if (req.method === 'GET' && path === '/api/me') {
         return send(res, 200, { user });
+      }
+
+      if (req.method === 'GET' && path === '/api/stats') {
+        const today = url.searchParams.get('today') || new Date().toISOString().slice(0, 10);
+        if (!validDate(today)) return error(res, 400, 'Invalid date.');
+        const stats = await one(`
+          WITH activity_days AS (
+            SELECT DISTINCT performed_on::date AS activity_day
+            FROM workout_logs
+            WHERE user_id = $1
+          ),
+          grouped_days AS (
+            SELECT activity_day,
+                   activity_day - ROW_NUMBER() OVER (ORDER BY activity_day)::integer AS group_key
+            FROM activity_days
+          ),
+          streaks AS (
+            SELECT COUNT(*)::integer AS length, MAX(activity_day) AS end_day
+            FROM grouped_days
+            GROUP BY group_key
+          )
+          SELECT
+            COALESCE(MAX(length) FILTER (WHERE end_day IN ($2::date, $2::date - 1)), 0)::integer AS current_streak,
+            COALESCE(MAX(length), 0)::integer AS longest_streak,
+            (SELECT COUNT(*)::integer FROM activity_days) AS active_days
+          FROM streaks
+        `, [user.id, today]);
+        return send(res, 200, stats);
+      }
+
+      if (req.method === 'POST' && path === '/api/chat') {
+        if (!GEMINI_API_KEY) {
+          return error(res, 503, 'AI chat is not configured. Add GEMINI_API_KEY to the server .env file.');
+        }
+        if (!allowChatRequest(user.id)) {
+          return error(res, 429, 'Please wait a minute before sending another chat message.');
+        }
+        const d = await readBody(req);
+        if (typeof d.message !== 'string' || !d.message.trim() || d.message.length > 1200) {
+          return error(res, 400, 'Enter a message up to 1,200 characters.');
+        }
+        const history = Array.isArray(d.history)
+          ? d.history.slice(-8).filter(item =>
+              item && ['user', 'model'].includes(item.role) &&
+              typeof item.text === 'string' && item.text.length <= 1200
+            )
+          : [];
+        let response;
+        try {
+          response = await fetch(
+            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-goog-api-key': GEMINI_API_KEY
+              },
+              body: JSON.stringify({
+                system_instruction: {
+                  parts: [{
+                    text: 'You are FitPath, a friendly general fitness helper for adults. Give concise, practical guidance about exercise technique and sustainable habits. Do not diagnose, prescribe treatment, or give individualized medical, injury, pregnancy, or calorie advice. Encourage a qualified clinician for health concerns. Do not claim to monitor workouts or know facts the user has not shared.'
+                  }]
+                },
+                contents: [
+                  ...history.map(item => ({
+                    role: item.role,
+                    parts: [{ text: item.text }]
+                  })),
+                  { role: 'user', parts: [{ text: d.message.trim() }] }
+                ],
+                generationConfig: { maxOutputTokens: 500, temperature: 0.6 }
+              }),
+              signal: AbortSignal.timeout(20000)
+            }
+          );
+        } catch {
+          return error(res, 502, 'The AI coach could not be reached. Please try again.');
+        }
+        if (!response.ok) {
+          return error(res, 502, 'The AI coach is temporarily unavailable. Please try again later.');
+        }
+        let result;
+        try {
+          result = await response.json();
+        } catch {
+          return error(res, 502, 'The AI coach returned an unreadable reply. Please try again.');
+        }
+        const reply = result.candidates?.[0]?.content?.parts
+          ?.map(part => part.text || '').join('').trim();
+        if (!reply) return error(res, 502, 'The AI coach returned an empty reply. Please try again.');
+        return send(res, 200, { reply });
       }
 
       if (req.method === 'PATCH' && path === '/api/me') {
@@ -690,7 +903,7 @@ const server = http.createServer(async (req, res) => {
 
       res.writeHead(200, {
         'Content-Type': type,
-        'Cache-Control': path === '/service-worker.js'
+        'Cache-Control': ['/','/index.html','/app.js','/app.css','/service-worker.js'].includes(path)
           ? 'no-cache'
           : 'public, max-age=300'
       });

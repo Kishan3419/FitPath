@@ -7,7 +7,7 @@
   <meta name="description" content="FitPath: exercises, simple diet ideas, and a daily fitness log.">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" href="/icons/icon-192.png">
-  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/app.css?v=4">
   <title>FitPath | Your daily movement</title>
 </head>
 <body>
@@ -31,12 +31,20 @@
             <div class="form-two"><label>Fitness level<select id="auth-level"><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></label>
               <label>Goal<select id="auth-goal"><option value="general">General fitness</option><option value="strength">Build strength</option><option value="weight-management">Weight management</option></select></label></div>
             <label>Food preference<select id="auth-diet"><option value="balanced">Balanced</option><option value="vegetarian">Vegetarian</option><option value="high-protein">Protein focused</option></select></label>
+            <label class="consent-label"><input id="registration-consent" type="checkbox" required> I agree to the <a href="/terms.html" target="_blank" rel="noopener">Terms</a> and have read the <a href="/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.</label>
           </div>
           <label>Email address<input name="email" id="auth-email" type="email" placeholder="you@example.com" autocomplete="email" required></label>
           <label>Password<input name="password" id="auth-password" type="password" minlength="10" placeholder="At least 10 characters" autocomplete="current-password" required></label>
           <p id="auth-error" class="form-error" role="alert" hidden></p>
           <button type="submit" class="primary-btn full" id="auth-submit">Sign in <span>→</span></button>
         </form>
+        <div class="google-auth">
+          <div class="auth-divider"><span>or continue with Google</span></div>
+          <label class="consent-label"><input id="google-consent" type="checkbox"> I agree to the <a href="/terms.html" target="_blank" rel="noopener">Terms</a> and have read the <a href="/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.</label>
+          <div id="google-button" hidden></div>
+          <p id="google-unavailable" class="fineprint">Google sign-in is not configured on this server yet.</p>
+          <p id="google-error" class="form-error" role="alert" hidden></p>
+        </div>
         <p class="fineprint">For adults 18+. General fitness and food information, not personalized medical or dietary advice.</p>
       </div>
     </section>
@@ -49,10 +57,15 @@
         <button data-tab="diet"><span class="nav-icon">◉</span><small>Diet</small></button>
         <button data-tab="profile"><span class="nav-icon">♙</span><small>Profile</small></button>
       </nav>
+      <button id="chat-launcher" class="chat-launcher" type="button" aria-label="Open FitPath AI coach">✦ <span>Coach</span></button>
+      <section id="chat-widget" class="chat-widget" aria-label="FitPath AI coach" hidden></section>
     </main>
+    <footer id="legal-footer" class="legal-footer" hidden>
+      <a href="/privacy.html">Privacy</a><a href="/terms.html">Terms</a><a href="/disclaimer.html">Disclaimer</a>
+    </footer>
   </div>
-  <div id="modal" class="modal-backdrop" hidden><div class="modal-sheet" role="dialog" aria-modal="true" aria-label="Exercise guide" id="modal-content"></div></div>
+  <div id="modal" class="modal-backdrop" hidden><div class="modal-sheet" role="dialog" aria-modal="true" aria-label="Workout and exercise details" id="modal-content"></div></div>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/app.js" defer></script>
+  <script src="/app.js?v=4" defer></script>
 </body>
 </html>

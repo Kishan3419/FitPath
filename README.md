@@ -1,6 +1,6 @@
-# FitPath v1 — lightweight Android and Docker fitness app
+# FitPath — lightweight Android and Docker fitness app
 
-FitPath is a small working MVP. It uses **JavaScript (Node.js + vanilla HTML/CSS/JS)**, SQLite (built into Node 22), and optionally an **Android WebView APK**. No external npm packages, PostgreSQL, Redis, or account subscriptions are needed. Designed for **Ubuntu 24.04 on an OCI free VM with 1 OCPU, 1 GB RAM, 5 GB swap, and 100 GB storage**.
+FitPath is a small working MVP. It uses **JavaScript (Node.js + vanilla HTML/CSS/JS)** and **PostgreSQL**, with an optional **Android WebView APK**. It is designed for **Ubuntu 24.04 on an OCI VM**.
 
 ## Features
 
@@ -8,20 +8,31 @@ FitPath is a small working MVP. It uses **JavaScript (Node.js + vanilla HTML/CSS
 - Save full name, optional age (18+), fitness level, goal, and food preference.
 - 12 exercises across beginner, intermediate and advanced with steps, equipment, suggested sets/reps, durations and safety advice.
 - 3 food plans (balanced, vegetarian, protein-focused), 4 meal ideas per plan.
-- Three rotating exercises each day, workout completion and history.
+- Three rotating exercises each day, a step-by-step guided workout that resumes at the first unfinished activity, and saved completion history.
+- Current and personal-best activity streaks based on saved workout dates.
+- Optional Google sign-in and a Gemini-powered fitness chat; both require server-side environment configuration.
+- Privacy Policy, Terms of Use, and Health Disclaimer pages, linked unobtrusively from the app footer.
+- Animated, simplified movement previews for all 12 exercise guides.
 - Responsive installable **PWA** from Android Chrome, plus Java Android WebView wrapper source.
-- Local persistent SQLite data in a Docker volume.
+- Persistent data in the configured PostgreSQL database.
 
-Not included yet: payments, video streaming, calorie prescriptions, AI coaching, clinician-approved personal diet plans, administrator panel, social functions, password recovery, or email verification. This is a starter app, **not for clinical use**. Not suitable as tailored guidance for minors.
+Not included yet: payments, video streaming, calorie prescriptions, clinician-approved personal diet plans, administrator panel, social functions, password recovery, in-app account deletion, or email verification. This is a starter app, **not for clinical use**. Not suitable as tailored guidance for minors.
 
-## 1. Quick local test (any PC with Node >= 22.13)
+Before public launch, configure an actual privacy/support email and review the draft legal pages for your operation. Google sign-in requires a Google **Web OAuth client ID** whose authorized JavaScript origin is your app domain. Gemini chat requires a Gemini API key. Put these values in `.env` on the server only; never commit them or expose API keys in browser code.
+
+Set `GOOGLE_CLIENT_ID`, `GEMINI_API_KEY`, and `FITPATH_CONTACT_EMAIL` in `.env` to enable those features and publish a valid contact. Google sign-in is for supported browsers; Google's embedded WebView restrictions may prevent sign-in in the optional Android wrapper, so use the installable Android Chrome PWA for Google sign-in.
+
+## 1. Run and validate with Docker
 
 ```bash
-cd FitPath-MVP
-node server.mjs
+cp .env.example .env
+# Configure PostgreSQL and any optional credentials in .env.
+docker compose up -d --build
+docker compose ps
+curl http://127.0.0.1:3000/health
 ```
 
-Open `http://localhost:3000`. `node --test tests/*.test.mjs` runs an API smoke/integration test. A `data/fitpath.db` file is created on first launch; `data/` is gitignored.
+The app needs the PostgreSQL settings (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD`) in `.env`. Run the API integration test in a Node container connected to a disposable PostgreSQL test database; do not point test runs at a production database.
 
 ## 2. Deploy to an OCI Ubuntu 24.04 VPS
 
